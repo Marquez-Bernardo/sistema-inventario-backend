@@ -18,7 +18,9 @@ import {
     getNextFolio,
     updateActivoLocation,
     getActivoPDF,
-    getActivoByTag
+    getActivoByTag,
+    updateActivoByTag, 
+    getActivoLookupData1
 } from '../controllers/activoController.js'; 
 
 const router = Router();
@@ -33,6 +35,10 @@ router.get('/lookup-data', protect, adminAndSuperAdminOnly, getActivoLookupData)
 //TAG
 // Registrar la ruta (colócala antes de las rutas con :id para evitar conflictos)
 router.get('/by-tag/:tag', protect, adminAndSuperAdminOnly, getActivoByTag);
+router.put('/by-tag/:tag', csrfProtection, protect, adminAndSuperAdminOnly, updateActivoByTag);
+router.get('/lookup-data1', protect, adminAndSuperAdminOnly, getActivoLookupData1);
+
+
 router.get('/next-folio/:basePrefix', protect, adminAndSuperAdminOnly, getNextFolio);
 
 // CRUD Activos

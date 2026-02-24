@@ -455,11 +455,140 @@ export async function deleteActivoImage(req, res) {
 export async function getActivoByTag(req, res) {
     const { tag } = req.params;
     try {
-        const query = `SELECT * FROM activos WHERE tag = ?`;
+        const query = `
+            SELECT 
+                -- Datos de Identificación
+                a.tag, 
+                a.descripcion, 
+                a.no_serie, 
+                a.marca, 
+                a.modelo,
+                a.proveedor, 
+                a.poliza, 
+                a.factura,
+                
+                -- Datos Financieros Base
+                a.costo, 
+                a.fecha_adquisicion, 
+                a.fecha_inicio_depreciacion,
+                cp.depreciacion AS tasa_anual_porcentaje,
+                cp.vida_util AS vida_util_meses,
+
+                -- CÁLCULOS DE DEPRECIACIÓN --
+                -- 1. Monto que se deprecia cada mes
+                ROUND((a.costo * (cp.depreciacion / 100)) / 12, 2) AS depreciacion_mensual,
+
+                -- 2. Meses que han pasado desde que inició la depreciación hasta hoy
+                TIMESTAMPDIFF(MONTH, a.fecha_inicio_depreciacion, CURDATE()) AS meses_transcurridos,
+
+                -- Nota: Valor original del activo antes de la depreciación
+                a.costo AS Costo_Original,
+
+                -- 3. Depreciación total acumulada (No puede ser mayor al costo original)
+                LEAST(
+                    a.costo, 
+                    ROUND(((a.costo * (cp.depreciacion / 100)) / 12) * TIMESTAMPDIFF(MONTH, a.fecha_inicio_depreciacion, CURDATE()), 2)
+                ) AS depreciacion_acumulada,
+
+                -- 4. Valor actual del activo (Costo - Acumulada)
+                GREATEST(
+                    0,
+                    a.costo - ROUND(((a.costo * (cp.depreciacion / 100)) / 12) * TIMESTAMPDIFF(MONTH, a.fecha_inicio_depreciacion, CURDATE()), 2)
+                ) AS valor_en_libros,
+
+                -- Clasificaciones y Relaciones
+                a.cuenta_mayor, 
+                a.cuenta_registro, 
+                a.cog, 
+                a.cuenta_conac, 
+                a.fuente_id, 
+                a.clasificacion_id,
+                a.concepto_id, 
+                a.partida_id,
+                a.area_id, 
+                a.ubicacion_id, 
+                a.responsable_id,
+                
+                -- Estado y Ubicación
+                a.estado, 
+                a.estatus_id, 
+                a.latitud, 
+                a.longitud,
+                a.directorio
+            FROM activos a
+            LEFT JOIN clasificaciones_por_partida cp ON a.partida_id = cp.Id
+            WHERE a.tag = ?
+        `;
+
         const [rows] = await dbPool.execute(query, [tag]);
-        if (rows.length === 0) return res.status(404).json({ mensaje: 'No encontrado' });
+
+        if (rows.length === 0) {
+            return res.status(404).json({ mensaje: 'Activo no encontrado con el TAG proporcionado.' });
+        }
+
+        // Retornamos el primer resultado (único por TAG)
         res.status(200).json(rows[0]);
+        
     } catch (error) {
-        res.status(500).json({ mensaje: 'Error interno' });
+        console.error('Error al obtener detalle del activo por TAG:', error);
+        res.status(500).json({ mensaje: 'Error interno del servidor al procesar la consulta.' });
+    }
+}
+
+// Actualizar activo usando el TAG como referencia
+export async function updateActivoByTag(req, res) {
+    const { tag } = req.params;
+    const {
+        descripcion, no_serie, marca, modelo,
+        proveedor, poliza, factura,
+        // Agregamos los IDs que vienen de los selects del frontend
+        fuente_id, area_id, ubicacion_id, estado, estatus_id
+    } = req.body;
+
+    try {
+        const query = `
+            UPDATE activos SET 
+                descripcion = ?, no_serie = ?, marca = ?, modelo = ?,
+                proveedor = ?, poliza = ?, factura = ?, fuente_id = ?,
+                area_id = ?, ubicacion_id = ?, estado = ?, estatus_id = ?
+            WHERE tag = ?
+        `;
+
+        const [result] = await dbPool.execute(query, [
+            descripcion, no_serie, marca, modelo,
+            proveedor, poliza, factura,
+            fuente_id, area_id, ubicacion_id, 
+            estado, estatus_id, tag
+        ]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ mensaje: 'No se encontró el activo para actualizar.' });
+        }
+
+        res.status(200).json({ mensaje: 'Expediente actualizado exitosamente.' });
+    } catch (error) {
+        console.error('Error al actualizar activo por TAG:', error);
+        res.status(500).json({ mensaje: 'Error interno al actualizar el expediente.' });
+    }
+}
+
+// Helper para cargar catálogos (Dropdowns) en la vista de detalle
+export async function getActivoLookupData1(req, res) {
+    try {
+        const [fuentes] = await dbPool.execute(`SELECT Id, concepto_adquisicion FROM fuentes_de_financiamiento ORDER BY concepto_adquisicion ASC`);
+        const [clasificaciones] = await dbPool.execute(`SELECT Id, clasificacion FROM clasificaciones_internas ORDER BY clasificacion ASC`);
+        const [conceptos] = await dbPool.execute(`SELECT Id, concepto FROM clasificaciones_por_concepto ORDER BY concepto ASC`);
+        const [partidas] = await dbPool.execute(`SELECT Id, partida FROM clasificaciones_por_partida ORDER BY partida ASC`);
+        const [areas] = await dbPool.execute(`SELECT Id, area FROM areas ORDER BY area ASC`);
+        const [ubicaciones] = await dbPool.execute(`SELECT Id, ubicacion FROM ubicaciones_edificios ORDER BY ubicacion ASC`);
+        const [responsables] = await dbPool.execute(`SELECT Id, CONCAT(nombres, ' ', apellido_paterno, ' ', apellido_materno) AS nombre_completo FROM personas WHERE activo = 1 ORDER BY nombres ASC`);
+        const [estatus] = await dbPool.execute(`SELECT Id, estatus FROM estatus ORDER BY estatus ASC`);
+
+        res.status(200).json({
+            fuentes, clasificaciones, conceptos, partidas, areas, ubicaciones, responsables, estatus
+        });
+    } catch (error) {
+        console.error('Error al obtener catálogos:', error);
+        res.status(500).json({ mensaje: 'Error al cargar catálogos.' });
     }
 }
